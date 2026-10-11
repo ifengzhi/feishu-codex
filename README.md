@@ -1,8 +1,12 @@
 # 飞书 Bot + Codex 任务应用
 
+[简体中文](README.md) | [English](README.en.md)
+
 独立运行在 Ubuntu 用户账户下的开发任务后台。飞书手机端通过按钮创建、选择和继续任务，电脑端通过 `feishu-codex attach` 接管同一后台任务。Python 3.12 + 官方 `lark-oapi` 1.7.3 + asyncio + SQLite + Unix socket；Codex 接口按本机 `codex-cli 0.160.0` 导出的 JSON Schema 实现。
 
-**本机状态（2026-10-11）**：后台已安装为 `zhi` 的 systemd 用户服务；已验证真实 app-server 初始化、创建新目录后运行任务、同一会话继续、进程重启后读取历史并恢复，以及 systemd 服务的实际模型调用。飞书凭据已单独配置，白名单已配置，长连接已建立；后台已有真实消息、卡片及底部菜单事件的处理记录。手机审批等完整端到端流程仍需实际验收。测试结果见本文末尾，不把模拟通过等同于飞书端到端通过。
+**状态核对日期：2026-10-11**。本机后台已安装为 `zhi` 的 systemd 用户服务，Codex app-server 就绪，飞书长连接正常，白名单已配置 1 人，无积压或失败通知。已交付直接聊天、分步建任务、普通问题回答、Card JSON 2.0 富文本、审批和官方 Codex CLI 接管。已有真实消息、卡片及底部菜单处理记录。真实 Codex 与模拟验证、尚待手机验收的项目分别列在第 8 节；连接成功不代表所有交互都已验收。这是本机检查快照，新安装不会自动获得上述配置。
+
+本文中文与 [英文版](README.en.md) 覆盖相同功能和部署流程；产品中的按钮与提示目前主要为中文，文档双语不代表界面已国际化。
 
 ## 1. 文件位置与安装
 
@@ -22,8 +26,8 @@
 cd /home/zhi/ws/feishu-codex
 bash scripts/install.sh
 export PATH="$HOME/.local/bin:$PATH"
-feishu-codex doctor
 systemctl --user enable --now feishu-codex
+feishu-codex doctor
 ```
 
 安装脚本保留已有配置，不改 `~/.codex/config.toml`、认证文件或模型服务。源码仓库的 [config.example.toml](config.example.toml) 中 App ID、App Secret 和白名单均为空。不要将私有配置复制回源码仓库。Git 已初始化，只管理项目文件，不自动推送。
@@ -31,6 +35,33 @@ systemctl --user enable --now feishu-codex
 如果 zsh 提示 `command not found: feishu-codex`，执行 `export PATH="$HOME/.local/bin:$PATH"` 即可在当前终端使用；将这一行加入 `~/.zshrc` 可对新终端生效。zsh 通常不读取 Ubuntu 的 `~/.profile`，所以仅在该文件中配置 PATH 不足。也可直接使用 `~/.local/bin/feishu-codex tasks` 或 `~/.local/bin/feishu-codex attach <任务编号>`，无需激活虚拟环境。
 
 Python 虚拟环境位于 `.venv/`。在新机器上先安装 Python 3.12、`python3-venv` 和可用的 Codex CLI。`codex_command` 只接受 `[可执行文件, "app-server", "--stdio"]`，不接受绕过沙箱的额外参数。模板中的 Codex 路径由安装脚本适配当前用户。
+
+当前验证环境为 Ubuntu 24.04 / Python 3.12 / Codex CLI 0.160.0。新机器先将项目放到自己的目录（例如 `~/ws/feishu-codex`），进入该目录再安装；`/home/zhi/...` 是本机路径示例，不要求创建 `zhi` 用户。Ubuntu 24.04 缺少依赖时可由管理员安装：
+
+```bash
+sudo apt update
+sudo apt install python3 python3-venv git
+command -v codex
+codex --version
+```
+
+确保同一用户的 Codex 已按公司要求配置并能调用模型；本项目不会安装/更换模型认证。官方终端接管依赖已验证版本的 `resume --remote unix://...` 能力，其他版本须先验证本机协议与接管功能。安装脚本生成用户 unit 并安装 Python 依赖，不会自动启用服务；`enable --now` 才会启动。
+
+配置参考（所有字段的模板见 [config.example.toml](config.example.toml)）：
+
+| 字段 | 含义 / 默认值 |
+| --- | --- |
+| `work_roots` | 第一项 `~/ws` 用于按钮创建，第二项 `~/remote-ws` 兼容旧任务 |
+| `data_dir`、`socket_path` | 运行数据目录及本地控制 socket；自定义时分别检查 |
+| `codex_command` | Codex 路径及固定的 `app-server --stdio` 参数 |
+| `approval_policy`、`sandbox` | 默认 `on-request` / `workspace-write`；还支持 `untrusted` / `read-only` |
+| `rpc_timeout`、`turn_timeout`、`approval_timeout` | 秒；默认 45 / 7200 / 1800 |
+| `interrupt_timeout`、`lease_timeout`、`progress_interval` | 秒；默认 15 / 30 / 30 |
+| `notification_retries` | 最多 4 次发送尝试 |
+| `log_max_bytes`、`log_backups` | 单日志默认 2 MiB，保留 3 份归档 |
+| `[feishu].app_id` | 应用标识，从“凭证与基础信息”获取；不是 API 密钥 |
+| `[feishu].app_secret` | 应用密钥，保密保存，不放进 Git、任务正文或日志 |
+| `[feishu].allowed_users` | 本应用的用户 `open_id` 数组；空数组拒绝远程任务操作 |
 
 配置文件可通过 `--config /绝对路径/config.toml` 或 `FEISHU_CODEX_CONFIG` 指定。修改 `data_dir`、`socket_path`、`work_roots` 即可分离部署位置；自定义 socket 的父目录必须由当前用户拥有、权限为 `700`。使用自定义配置部署时：
 
@@ -44,11 +75,30 @@ systemctl --user restart feishu-codex
 
 ## 2. 飞书后台配置与授权
 
-你已启用机器人能力，接着按以下顺序设置。无需公网 IP、域名、Webhook 或入站端口；SDK 从 Ubuntu 主动建立长连接，发消息调用飞书 API。企业管理员可能需要审批权限和发布。
+以下步骤可从尚未创建应用开始执行，已完成的步骤无需重做。无需公网 IP、域名、Webhook 或入站端口；Ubuntu 需能出站访问飞书 HTTPS/WebSocket 和现有模型服务。企业管理员可能需要审批权限和发布。当前使用飞书中国站默认 API 域名，未配置或验收国际版 Lark 域名切换。
+
+### 2.0 创建企业自建应用并启用机器人
+
+1. 使用目标企业/组织账户登录[飞书开发者后台](https://open.feishu.cn/app)。不能创建应用时，请联系企业管理员授予开发权限。
+2. 点击 **创建企业自建应用**，填写名称（例如 `Codex 任务助手`）、描述、图标等后台要求的字段并创建。此项目使用企业自建应用机器人，不是群里的 Webhook 自定义机器人。
+3. 进入 **添加应用能力**（或 **应用能力**），找到 **机器人** 并添加/启用，保存机器人名称及描述。无需启用网页应用、配置网页主页或 OAuth 重定向 URL。
+4. 进入 **凭证与基础信息 → 应用凭证** 获取 App ID / App Secret，按 2.1 节写入本机私有配置。不要复制到 README 或聊天中。
+5. 按 2.1–2.4 节完成权限、本机连接、事件和卡片回调、发布及本机白名单。底部菜单可在首次发布前按 3.2 节一起配置。
+
+官方[创建应用教程](https://open.feishu.cn/document/quick-start-of-personnel-and-attendance-management-system/step-1-create-and-configure-an-application)包含创建入口和添加机器人能力。本项目只需要下面列出的权限，不需要该教程业务示例中的考勤、审批、网页或通讯录权限。使用测试版本时，凭据、成员和客户端租户须对应测试版本；切换正式版本后重新核对。
 
 ### 2.1 凭据与权限
 
-进入[飞书开发者后台](https://open.feishu.cn/app)，选择企业自建应用。在 **凭证与基础信息** 获取 App ID 和 App Secret，对应配置的 `[feishu].app_id`、`app_secret`。本机已保存你提供的值，不需要再次填写，也不要在聊天任务中粘贴凭据。
+在 **凭证与基础信息** 获取 App ID 和 App Secret，对应 `[feishu].app_id`、`app_secret`。新安装必须自己填写；本机已有有效配置时保留它。编辑 `~/.config/feishu-codex/config.toml` 中对应字段，保留其他配置，模板刻意留空：
+
+```toml
+[feishu]
+app_id = ""
+app_secret = ""
+allowed_users = []
+```
+
+保存并 `chmod 600 ~/.config/feishu-codex/config.toml` 后启动或重启用户服务，运行 `feishu-codex doctor` 检查长连接。此时白名单可以为空，仍能建连和进行 `/whoami` 身份发现；普通任务被拒绝。未填凭据时不会连接飞书，仍可本机使用和测试。
 
 在 **权限管理 → 开通权限** 申请以下应用身份权限：
 
@@ -75,7 +125,9 @@ feishu-codex doctor
 3. 如需底部自定义菜单，再添加 **机器人自定义菜单事件**，事件名 `application.bot.menu_v6`。
 4. 在回调配置中同样选择 **使用长连接接收回调**，添加新版 **卡片回传交互** `card.action.trigger`。不要选旧版卡片回调，不要填写公网回调 URL。
 
-代码已注册这三种处理器。当前 SDK 1.7.3 的 CARD 帧丢弃分支由 `CardCompatibleClient` 做局部适配；SDK 仍负责连接、心跳、重连、分片和事件反序列化。测试包含真实 SDK 的 EVENT/CARD protobuf 帧、分片及回调应答。升级 SDK 时先运行相应回归测试。参考[官方 Python 回调说明](https://open.feishu.cn/document/server-side-sdk/python--sdk/handle-callbacks)及[飞书回调长连接说明](https://feishu.apifox.cn/doc-7518584)。
+代码已注册这三种处理器。当前 SDK 1.7.3 的 CARD 帧丢弃分支由 `CardCompatibleClient` 做局部适配；SDK 仍负责连接、心跳、重连、分片和事件反序列化。测试包含真实 SDK 的 EVENT/CARD protobuf 帧、分片及回调应答。升级 SDK 时先运行相应回归测试。参考[官方 Python 回调说明](https://open.feishu.cn/document/server-side-sdk/python--sdk/handle-callbacks)和[配置回调订阅方式](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/callback-subscription/configure-callback-request-address)。
+
+事件与回调是两项配置：只订阅消息事件不会自动启用卡片按钮。出现“该应用尚未配置卡片回调”时，回到**回调配置**检查长连接和 `card.action.trigger`，保存并按后台要求发布；不要改用旧回调或临时添加 Webhook。若平台不允许保存长连接，先核对凭据、进程和出站网络，等待本机成功建连。只运行一套使用该 App ID 的服务；官方长连接是集群分发，多个客户端会分走事件，而非广播。
 
 ### 2.3 可用范围与发布
 
@@ -116,6 +168,10 @@ feishu-codex doctor
    ```
 
 重启会中断当时正在执行的 turn，首次授权时请在创建任务前完成。白名单为空时拒绝全部远程任务、查询和审批；本机同一 Linux 用户的控制台仍可管理任务。飞书用户只可访问本人创建的任务，本地控制台可接管任意本机任务。
+
+`ou_...` 是用户在此应用下的身份标识，不是会周期过期的 access token；本项目的白名单条目没有自动到期时间。不同应用的 open_id 不能混用，重建应用或账户身份发生变化后应重新发现并核对。SDK 管理调用 API 所需的短期应用 token，无需把 token 填进白名单。撤销授权时从 `allowed_users` 删除该用户并在合适时机重启，同时可调整飞书可用范围。
+
+首次验收顺序：`doctor` 长连接正常 → `/whoami` 在本机出现记录 → 白名单加入本人并加载 → 私聊发送 `菜单` 得到卡片 → 点击“任务列表”有回复 → 底部菜单“任务列表”也有回复。卡片按钮和底部菜单是不同事件入口，不能只验其中一个。
 
 ## 3. 四个按钮与逐步操作
 
@@ -213,7 +269,7 @@ answer 任务编号 问题请求编号 {"问题ID":["你的回答"]}
    feishu-codex status a1b2c3d4e5f6
    ```
 
-`/interrupt` 只中断当前 turn，之后可明确继续；`/cancel` 或“结束任务”的确认按钮取消整条任务。完成的任务仍可追加要求，已取消的任务需重新创建。**结束任务与退出终端是不同操作。**
+飞书命令 `interrupt <任务编号>` 或本机 `feishu-codex interrupt <任务编号>` 只中断当前 turn；`cancel <任务编号>` 或“结束任务”的确认按钮取消整条任务。简易终端对应 `/interrupt`、`/cancel`，不要将其当作官方 Codex CLI 的内置命令。完成的任务仍可直接发消息追加要求，已取消的任务需重新创建。**结束任务与退出终端是不同操作。**
 
 ## 5. 命令模式
 
@@ -238,6 +294,7 @@ help
 
 ```bash
 feishu-codex create --workdir '~/ws/demo' --mkdir --key demo-1 -- '实现 hello.py，补 README 和测试，不推送'
+feishu-codex answer 任务编号 请求编号 '{"q1":["答案"]}'
 ```
 
 工作路径正确展开 Home，规范化后检查配置根目录和符号链接目标；相对路径位于 `work_roots` 第一项。不存在的目录必须显式 `--mkdir`（按钮向导输入名字即表示创建）；无效路径报错，不回退到其他目录。历史会话的实际 cwd 必须与目标相同，已有任务绑定的会话不能再绑定第二个任务。
@@ -262,7 +319,7 @@ flowchart LR
 
 后台独占 app-server 的 stdin/stdout，默认全局串行执行。查询不需要获得修改锁，等待审批不阻塞状态查询。飞书长连接在单独子进程运行，SDK 断线自动重连；进程退出由后台限速重启。终端通过同一 UID 的 Unix socket 接入，socket 为 `600`，有连接级控制租约和心跳。
 
-`feishu-codex attach <任务编号>` 启动官方 `codex resume --remote unix://... <threadId>` 界面，连接后台为该任务建立的临时协议入口。后台仍管理同一个 app-server 和 turn；进入界面不会新建任务或另启模型执行进程。入口只允许当前绑定任务，审批转换为共享数据库记录并验证一次性决定；运行中追加走 `turn/steer`，空闲时启动原会话后续 turn。socket 断开、控制连接断开、租约过期或 app-server 重启后入口关闭；退出不会重放请求。参考 [官方 CLI remote 参数](https://learn.chatgpt.com/docs/developer-commands?surface=cli) 和 [app-server Unix socket 协议](https://learn.chatgpt.com/docs/app-server)。
+`feishu-codex attach <任务编号>` 启动官方 `codex resume --remote unix://... <threadId>` 界面，连接后台为该任务建立的临时协议入口。后台仍管理同一个 app-server 和 turn；进入界面不会新建任务或另启模型执行进程。入口只允许当前绑定任务，审批转换为共享数据库记录并验证一次性决定；运行中追加走 `turn/steer`，空闲时启动原会话后续 turn。socket 断开、控制连接断开、租约过期或 app-server 重启后入口关闭；退出不会重放请求。此行为依据本机 Codex 0.160.0 的协议与真实 PTY 测试验证，升级前需重新执行第 8 节的检查。
 
 原生接管保留项目目录、模型服务、沙箱和人工审批策略。`/new`、切换其他会话、修改全局配置、直接进程执行等绕过任务管理的协议操作会明确拒绝；切换任务请先 `/quit`，再 attach 对应编号。只支持本次命令/文件批准、当前 turn 权限和普通问题；选择会话级永久批准等不支持的决定会拒绝并断开界面，原请求保留供重新处理。首次目录信任仅允许写入当前任务的 `projects.<目录>.trust_level`，不覆盖认证或模型配置。
 
@@ -326,6 +383,8 @@ sudo loginctl enable-linger "$USER"
 
 卡片正文有发送容量限制，超长内容明确标记为前段预览；本机 `feishu-codex status <任务编号>` 查看后台保存的结果。审批的目录、原因、范围和实际命令分开展示；审批详情超过容量时不提供批准按钮，需到终端查看后处理。模型生成的 HTML 标签不会触发 @ 人通知。只包含内部用户消息 ID 的事件不再作为进度主动发送。
 
+`status` 展示持久化摘要，并非完整逐 token 会话：当前每条 agent 消息最多保留末尾 12,000 字符作为任务摘要，状态查询默认带最近 100 条关键事件，长卡片另有显示截断。需要更多上下文时接管同一会话查看 Codex 保存的历史；不承诺 `status` 包含无限长输出。
+
 升级后旧消息不会自动重发或转换；点击“任务列表”选择任务，再点“查询结果”，即可取得新格式。手机端表格、代码块和按钮的实际显示需使用支持 Card JSON 2.0 的飞书客户端验收。
 
 格式依据官方文档：[富文本组件](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-components/content-components/rich-text)、[按钮与回调](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button)、[Card JSON 2.0](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-structure)。
@@ -339,9 +398,11 @@ bash scripts/check-protocol.sh
 .venv/bin/ruff check src tests scripts
 ```
 
-本机模拟与协议回归结果：**92 passed**；最后增补失效问题保护后的聊天专项 **17 passed**，静态检查通过。模拟测试不读取真实飞书配置、不发真实消息、不调用模型。覆盖新目录与符号链接边界、串行执行、继续/steer/取消、批准/拒绝/重复/过期/错误归属、普通用户输入、幂等和去重、SQLite 恢复、真实 Unix socket 断开、后台进程被杀后恢复、终端接管与通知暂停恢复、通知失败与积压隔离、凭据脱敏、真实 SDK 消息/卡片/菜单帧和请求构造、按钮向导/上下文/旧卡片失效。还覆盖结束任务归档、连续点击和慢回调、原生终端的 Unix WebSocket 握手与事件、仅绑定任务访问、沙箱/配置写入约束、共享审批及权限子集、重复请求不重放、串行执行、租约释放、启动失败、恢复期间事件缓冲、真实后台被杀后旧终端及审批失效、遗留 socket 清理和默认 `~/ws`。SDK 内置 protobuf 有两条 Python 弃用警告，不影响通过。 富文本回归覆盖最近提交记录表格、代码块、长中文内容、Card 2.0 按钮回调、审批容量保护及无效进度过滤。 直接聊天回归覆盖明确任务绑定、连续追加、空闲继续、输入向导优先、单题回答/选项简写、多题逐题收集、请求选择、重复消息去重、问题失效拦截、审批与回答分离及终端控制权释放恢复。
+本机模拟与协议回归结果：**96 passed**（含 3 项凭据审计测试）；本机重新导出协议后的校验 **2 passed**，静态检查通过。模拟测试不读取真实飞书配置、不发真实消息、不调用模型。覆盖新目录与符号链接边界、串行执行、继续/steer/取消、批准/拒绝/重复/过期/错误归属、普通用户输入、幂等和去重、SQLite 恢复、真实 Unix socket 断开、后台进程被杀后恢复、终端接管与通知暂停恢复、通知失败与积压隔离、凭据脱敏、真实 SDK 消息/卡片/菜单帧和请求构造、按钮向导/上下文/旧卡片失效。还覆盖结束任务归档、连续点击和慢回调、原生终端的 Unix WebSocket 握手与事件、仅绑定任务访问、沙箱/配置写入约束、共享审批及权限子集、重复请求不重放、串行执行、租约释放、启动失败、恢复期间事件缓冲、真实后台被杀后旧终端及审批失效、遗留 socket 清理和默认 `~/ws`。SDK 内置 protobuf 有两条 Python 弃用警告，不影响通过。 富文本回归覆盖最近提交记录表格、代码块、长中文内容、Card 2.0 按钮回调、审批容量保护及无效进度过滤。 直接聊天回归覆盖明确任务绑定、连续追加、空闲继续、输入向导优先、单题回答/选项简写、多题逐题收集、请求选择、重复消息去重、问题失效拦截、审批与回答分离及终端控制权释放恢复。
 
-`scripts/audit-secrets.py` 会以不输出凭据值的方式检查 Git 跟踪文件及本应用日志/数据库中是否存在本机已知凭据。本机检查未发现已知凭据进入上述内容；私有配置与运行数据均不在 Git 中。
+凭据检查的范围、命令和局限见第 9 节。此次补充了未跟踪文件、Git 历史及常见凭据格式检查；新增测试确认即使密钥已从当前文件删除，也能在历史中检出，且不会输出密钥值。
+
+新机器尚未生成 `.cache/protocol` 时，协议相关测试会显示跳过；先运行 `bash scripts/check-protocol.sh` 再检查。当前本机已重新导出并通过协议测试，不将跳过计为通过。
 
 真实 Codex 测试需主动运行，会调用现有模型服务，创建临时项目，**不自动批准**任何请求：
 
@@ -365,6 +426,32 @@ bash scripts/check-protocol.sh
 
 原生终端审批/普通问题的共享记录与权限校验已由模拟协议测试覆盖；手机真实审批与原生终端来回切换仍需用户在实际请求出现时验收，不把无凭据/模拟测试写成真实飞书端到端成功。
 
-**配置后待验收**：本人加入白名单；手机“菜单”卡片和底部四个菜单；实际飞书目录选择及任务描述；手机真实审批/拒绝与卡片更新；飞书普通输入；手机与 Terminal 切换；真实通知和限流失败恢复。长连接握手成功仅证明连接，不代表上述交互已验收。本机未发送未经请求的试探消息。
+**仍待本人手机端验收**：真实审批/拒绝与处理后的卡片更新；真实 Codex 普通问题与多题逐题回答；手机与 Terminal 来回切换；移动端长表格/代码块显示；真实通知限流与失败恢复。白名单和长连接已在本机核实，基础消息、卡片、底部菜单已有历史处理记录；这些不再列为未配置，但最新功能的模拟通过仍不等于手机端验收。新安装应从第 2 节重新执行配置和首次验收。本次文档/审计更新未发送真实飞书消息。
 
 官方 Codex 文档：[App Server](https://developers.openai.com/codex/app-server)。协议可能随 Codex 更新改变，升级后先导出 schema 并运行协议/进程/SDK 测试，再执行真实最小任务；不要直接修改字段猜测兼容。
+
+## 9. 敏感信息与安全检查
+
+2026-10-11 检查未在本项目当前源码/文档/配置模板、非忽略的未跟踪文件、可达 Git 历史 blob 与提交信息、本应用日志及 SQLite 逻辑内容中发现本机已知凭据或审计脚本所覆盖的常见凭据格式。检查覆盖当时已有的 6 个提交、71 个历史 blob；新增文档提交后对象数会增加，以重新运行结果为准。测试中的 `FAKE_` 等字符串是模拟数据，不是可用凭据。
+
+| 数据 | 存放与管理 |
+| --- | --- |
+| 飞书 App Secret | 私有 `~/.config/feishu-codex/config.toml`，本机权限 `600`，不在 Git 中 |
+| 模型 API Key/认证 | 沿用当前用户的 Codex 配置、认证文件或已有环境；不复制到本项目 |
+| App ID / open_id | 应用/用户标识，不是密钥；公开示例仍用空值或占位符 |
+| 任务、回答、日志、通知 | 私有运行目录 `700`；可能包含业务敏感内容，不应公开上传 |
+| 源码与模板 | `.gitignore` 排除 `.env*`、`config.toml`、数据库、日志、运行目录及缓存 |
+
+重新检查（在项目目录执行；使用自定义配置时设置 `FEISHU_CODEX_CONFIG`）：
+
+```bash
+.venv/bin/python scripts/audit-secrets.py
+.venv/bin/python scripts/audit-secrets.py --history
+git status --short
+```
+
+默认检查当前已跟踪及非忽略的未跟踪文件、配置所指向的运行日志和数据库。`--history` 额外检查所有 Git 引用可达的 blob 与提交信息。脚本仅输出命中类型及文件/对象位置，不输出值；出现候选匹配以非零状态退出，需要本地确认。已知凭据来源为私有配置、当前进程中名称含密钥相关词的环境变量，以及当前 `CODEX_HOME`（默认 `~/.codex`）的配置/认证文件；只读取以做内存比对，不改写认证。
+
+这不是“绝对不存在任何敏感信息”的证明：未知格式凭据、个人信息或商业机密不能全部自动识别；忽略文件、依赖缓存、Git reflog/不可达对象、外部备份、飞书聊天历史及第三方系统不在此项目审计范围内。systemd 独有、未传给本次审计进程的环境密钥也不一定进入已知值列表。`.gitignore` 不会撤销已经提交过的秘密。
+
+你此前在聊天中提供过 App Secret；这与源码泄露是不同范围。若希望消除该聊天副本的风险，可在飞书后台重置 Secret，再在本机私有配置更新并重启服务。本次未擅自轮换任何凭据。不要将待轮换的新密钥再次粘贴到聊天、提交信息、README 或任务描述中。
