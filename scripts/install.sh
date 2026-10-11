@@ -14,3 +14,5 @@ ln -sfn "$project_dir/.venv/bin/feishu-codex" "$HOME/.local/bin/feishu-codex"
 .venv/bin/python scripts/render-service.py
 systemctl --user daemon-reload
 printf '%s\n' '安装完成；原有配置未覆盖。启动：systemctl --user enable --now feishu-codex'
+printf '%s\n' '当前终端启用命令：export PATH="$HOME/.local/bin:$PATH"'
+printf '%s\n' '若新开的 zsh 仍找不到命令，请将上述 PATH 配置加入 ~/.zshrc；也可直接运行 ~/.local/bin/feishu-codex。'

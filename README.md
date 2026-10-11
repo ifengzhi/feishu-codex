@@ -28,6 +28,8 @@ systemctl --user enable --now feishu-codex
 
 安装脚本保留已有配置，不改 `~/.codex/config.toml`、认证文件或模型服务。源码仓库的 [config.example.toml](config.example.toml) 中 App ID、App Secret 和白名单均为空。不要将私有配置复制回源码仓库。Git 已初始化，只管理项目文件，不自动推送。
 
+如果 zsh 提示 `command not found: feishu-codex`，执行 `export PATH="$HOME/.local/bin:$PATH"` 即可在当前终端使用；将这一行加入 `~/.zshrc` 可对新终端生效。zsh 通常不读取 Ubuntu 的 `~/.profile`，所以仅在该文件中配置 PATH 不足。也可直接使用 `~/.local/bin/feishu-codex tasks` 或 `~/.local/bin/feishu-codex attach <任务编号>`，无需激活虚拟环境。
+
 Python 虚拟环境位于 `.venv/`。在新机器上先安装 Python 3.12、`python3-venv` 和可用的 Codex CLI。`codex_command` 只接受 `[可执行文件, "app-server", "--stdio"]`，不接受绕过沙箱的额外参数。模板中的 Codex 路径由安装脚本适配当前用户。
 
 配置文件可通过 `--config /绝对路径/config.toml` 或 `FEISHU_CODEX_CONFIG` 指定。修改 `data_dir`、`socket_path`、`work_roots` 即可分离部署位置；自定义 socket 的父目录必须由当前用户拥有、权限为 `700`。使用自定义配置部署时：
