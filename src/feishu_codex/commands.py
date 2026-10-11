@@ -6,7 +6,7 @@ from .config import UserError
 
 HELP = """飞书私聊 / 本地命令（任务编号必须明确）：
 create --workdir ~/ws/new-project --mkdir --key demo-1 [--thread 历史会话ID] -- 自然语言任务要求和背景
-tasks
+tasks [--all]（默认隐藏已结束任务；--all 包含历史）
 status <任务编号>
 continue <任务编号> <明确的后续要求>
 append <任务编号> <追加要求>（运行中使用 turn/steer）
@@ -29,7 +29,11 @@ class Parser(argparse.ArgumentParser):
 def parse(line):
     line = line.strip().removeprefix("/")
     op, _, tail = line.partition(" ")
-    if op in ("help", "tasks", "diagnose"):
+    if op == "tasks":
+        if tail.strip() not in ("", "--all"):
+            raise UserError("用法：tasks [--all]")
+        return {"op": op, "all": tail.strip() == "--all"}
+    if op in ("help", "diagnose"):
         return {"op": op}
     if op == "create":
         header, separator, text = tail.partition(" -- ")

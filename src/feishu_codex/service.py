@@ -106,8 +106,8 @@ class Service:
         op, tid = req.get("op"), req.get("task")
         self.check(actor)
         if op == "tasks":
-            sql = "SELECT id,cwd,status,summary,updated FROM tasks"
-            return self.db.all(sql + (" ORDER BY created DESC LIMIT 200" if actor == "local" else " WHERE owner=? ORDER BY created DESC LIMIT 200"),
+            sql = "SELECT id,cwd,status,summary,updated,closed FROM tasks WHERE " + ("1=1" if req.get("all") else "closed=0")
+            return self.db.all(sql + (" ORDER BY created DESC LIMIT 200" if actor == "local" else " AND owner=? ORDER BY created DESC LIMIT 200"),
                                () if actor == "local" else (actor,))
         if op == "diagnose":
             state = self.feishu_state
@@ -117,6 +117,8 @@ class Service:
                     "remote_users": len(self.cfg.feishu.get("allowed_users", [])),
                     "work_roots": self.cfg.work_roots, "data_dir": self.cfg.data_dir,
                     "socket": self.cfg.socket_path, "protocol": "codex-cli 0.160.0",
+                    "remote_events_processing": self.db.one("SELECT count(*) n FROM dedup WHERE status='processing'")["n"],
+                    "notifications_pending": self.db.one("SELECT count(*) n FROM outbox WHERE status='pending'")["n"],
                     "notification_failures": self.db.one("SELECT count(*) n FROM outbox WHERE status='failed'")["n"]}
         if op == "status":
             self.check(actor, tid)
@@ -167,7 +169,7 @@ class Service:
         if self.db.redact(message) != message:
             raise UserError("要求中包含疑似凭据")
         t = self.db.task(tid)
-        if t["status"] == "cancelled":
+        if t["closed"] or t["status"] == "cancelled":
             raise UserError("任务已取消；请创建新任务")
         if t["status"] in ("starting", "cancelling"):
             raise UserError("任务正在切换状态，请稍后查询再操作")
@@ -189,6 +191,9 @@ class Service:
 
     async def interrupt(self, tid, cancel=False):
         t = self.db.task(tid)
+        if cancel:
+            self.db.update(tid, closed=1)
+            self.db.run("UPDATE ui_sessions SET current_task=NULL,stage='idle',data='{}',flow='' WHERE current_task=?", (tid,))
         if t["status"] == "cancelled":
             return {"task": tid, "status": "cancelled"}
         target = "cancelled" if cancel else "interrupted"

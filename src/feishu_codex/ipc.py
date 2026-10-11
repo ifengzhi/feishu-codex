@@ -121,7 +121,7 @@ class IPCServer:
             ui_result = await self.wizard.handle(req)
             if ui_result is not None:
                 tid = ui_result["task"]
-                result = {"task": tid, "stage": ui_result["stage"], "message": "已更新任务向导"}
+                result = {"task": tid, "stage": ui_result["stage"], "message": "已收到，请使用最新指引，无需重复点击" if ui_result.get("repeated") else "已更新任务向导"}
             elif req.get("card"):
                 value = req["card"]
                 tid = value["task"]
@@ -149,7 +149,8 @@ class IPCServer:
             result = {"error": s.db.redact(str(e)) if isinstance(e, (UserError, ValueError)) or type(e).__name__ == "RpcError" else type(e).__name__}
         s.db.run("UPDATE dedup SET status='done',result=? WHERE id=?", (encode(s.db.redact(result)), key))
         if ui_result is not None:
-            s.db.notify("ui:" + key, None, ui_result["destination"], "ui", ui_result["card"])
+            if not ui_result.get("repeated"):
+                s.db.notify("ui:" + key, None, ui_result["destination"], "ui", ui_result["card"])
         elif not req.get("card"):
             # Explicit command replies are allowed during takeover; only proactive notices pause.
             s.db.notify("reply:" + key, None, req.get("chat") or "open_id:" + actor, "reply", render(result) if not isinstance(result, str) else result)

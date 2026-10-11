@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 from conftest import active, create
@@ -34,3 +35,21 @@ async def test_paused_backlog_cannot_starve_other_tasks(service):
     sender = RecordingSender()
     await Outbox(s, sender).once()
     assert len(sender.sent) == 1 and sender.sent[0][0]["task"] == b
+
+
+async def test_superseded_ui_in_loaded_batch_is_not_sent(service, monkeypatch):
+    s = service
+    s.db.notify("reply", None, "oc_test", "reply", "reply")
+    s.db.notify("old-ui", None, "oc_test", "ui", {"old": True})
+    sent = []
+    async def send(fn, row, body):
+        sent.append(row["id"])
+        if row["id"] == "reply":
+            s.db.notify("new-ui", None, "oc_test", "ui", {"new": True})
+        return "om_test"
+    monkeypatch.setattr(asyncio, "to_thread", send)
+    outbox = Outbox(s, RecordingSender())
+    await outbox.once()
+    assert sent == ["reply"]
+    await outbox.once()
+    assert sent == ["reply", "new-ui"]

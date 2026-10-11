@@ -1,5 +1,7 @@
+import asyncio
 import base64
 import json
+import threading
 
 import lark_oapi as lark
 import pytest
@@ -94,3 +96,27 @@ def test_identity_discovery_does_not_grant_access(service):
     bridge.handler()._do_without_validation(json.dumps(p).encode())
     assert calls == [{"op": "identity_seen", "open_id": "ou_test"}]
     assert service.cfg.feishu["allowed_users"] == []
+
+
+@pytest.mark.parametrize("kind", ["card", "event"])
+async def test_slow_callback_leaves_websocket_loop_responsive(service, kind):
+    release = threading.Event()
+    entered = threading.Event()
+    def call(req):
+        entered.set()
+        release.wait(2)
+        return {}
+    client = CardCompatibleClient("cli_fake", "fake_secret", event_handler=Bridge(service.cfg, call).handler())
+    async def write(data):
+        pass
+    client._write_message = write
+    pending = asyncio.create_task(client._handle_data_frame(frame(json.dumps(payload()).encode(), kind)))
+    try:
+        async with asyncio.timeout(1):
+            while not entered.is_set():
+                await asyncio.sleep(0.001)
+        # The old synchronous dispatcher only yielded after its two-second wait.
+        assert not pending.done()
+    finally:
+        release.set()
+        await pending

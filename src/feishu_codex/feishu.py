@@ -1,4 +1,5 @@
 """Official SDK long connection in a separate process; no public listener."""
+import asyncio
 import base64
 import json
 import logging
@@ -27,7 +28,7 @@ class CardCompatibleClient(lark.ws.Client):
     """
     async def _handle_data_frame(self, frame):
         header = next((h for h in frame.headers if h.key == HEADER_TYPE), None)
-        if not header or header.value != MessageType.CARD.value:
+        if not header or header.value not in (MessageType.CARD.value, MessageType.EVENT.value):
             return await super()._handle_data_frame(frame)
         headers = {h.key: h.value for h in frame.headers}
         payload = frame.payload
@@ -39,7 +40,8 @@ class CardCompatibleClient(lark.ws.Client):
         response = Response(code=200)
         try:
             started = time.monotonic()
-            result = self._event_handler._do_without_validation(payload)
+            # Local IPC can wait for Codex; never block SDK heartbeats/other frames.
+            result = await asyncio.to_thread(self._event_handler._do_without_validation, payload)
             timing = frame.headers.add()
             timing.key, timing.value = HEADER_BIZ_RT, str(int((time.monotonic() - started) * 1000))
             if result is not None:
@@ -100,8 +102,9 @@ class Bridge:
                                 "actor": event.operator.open_id, "chat": event.context.open_chat_id,
                                 "card": event.action.value})
             error = result.get("error") if isinstance(result, dict) else None
+            message = result.get("message", "已发送下一步指引") if isinstance(result, dict) else "已发送下一步指引"
             return P2CardActionTriggerResponse({"toast": {
-                "type": "error" if error else "success", "content": error or ("已发送下一步指引" if event.action.value.get("ui") else "决定已处理；卡片将更新")}})
+                "type": "error" if error else "success", "content": error or (message if event.action.value.get("ui") else "决定已处理；卡片将更新")}})
         except Exception:
             return P2CardActionTriggerResponse({"toast": {"type": "error", "content": "后台响应超时；请查询请求状态，勿重复批准"}})
 

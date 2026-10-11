@@ -41,6 +41,11 @@ class Store:
           status TEXT, attempts INTEGER DEFAULT 0, next_at REAL DEFAULT 0,
           message_id TEXT, error TEXT DEFAULT '', version INTEGER DEFAULT 1);
         ''')
+        if 'closed' not in {r['name'] for r in self.all('PRAGMA table_info(tasks)')}:
+            self.run('ALTER TABLE tasks ADD COLUMN closed INTEGER NOT NULL DEFAULT 0')
+        self.run("UPDATE tasks SET closed=1 WHERE status='cancelled'")
+        self.run("UPDATE ui_sessions SET current_task=NULL,stage='idle',data='{}',flow='' "
+                 "WHERE current_task IN (SELECT id FROM tasks WHERE closed=1)")
 
     def one(self, sql, args=()):
         row = self.db.execute(sql, args).fetchone()
@@ -72,6 +77,10 @@ class Store:
     def notify(self, key, task, chat, kind, body, refresh=False):
         if not chat:
             return
+        if kind == 'ui':
+            # Only the latest unsent guide is useful. Never coalesce approval cards.
+            self.run("UPDATE outbox SET status='superseded',version=version+1 "
+                     "WHERE chat=? AND kind='ui' AND status='pending' AND id!=?", (chat, key))
         body = encode(self.redact(body))
         self.run("INSERT OR IGNORE INTO outbox(id,task,chat,kind,body,status) VALUES(?,?,?,?,?,'pending')",
                  (key, task, chat, kind, body))

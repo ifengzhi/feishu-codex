@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -47,6 +48,7 @@ async def test_wizard_new_directory_and_explicit_context(service):
     flow = session(s)["flow"]
     await click(ipc, "confirm_end", "e8", task=tid, flow=flow)
     assert s.db.task(tid)["status"] == "cancelled"
+    assert session(s)["current_task"] is None
     repeat = await click(ipc, "confirm_end", "e9", task=tid, flow=flow)
     assert "失效" in repeat["error"]
 
@@ -119,3 +121,96 @@ async def test_selection_and_cancel_confirmation_bind_target(service):
     result = await click(ipc, "confirm_end", "e5", task=a, flow=flow)
     assert "error" in result
     assert s.db.task(a)["status"] == "running" and s.db.task(b)["status"] == "queued"
+
+
+async def test_ended_task_hidden_but_history_retained(service):
+    from conftest import completed, create
+
+    from feishu_codex.commands import parse
+    s, ipc = service, IPCServer(service)
+    finished = await active(s, cwd="finished")
+    await completed(s, finished)
+    ended = await create(s)
+    await click(ipc, "select", "select", task=ended)
+    await s.execute({"op": "cancel", "task": ended})
+    assert session(s)["current_task"] is None
+    await click(ipc, "list", "list")
+    assert ended not in json.dumps(last_card(s))
+    assert finished in json.dumps(last_card(s))
+    assert [t["id"] for t in await s.execute(parse("tasks"))] == [finished]
+    assert len(await s.execute(parse("tasks --all"))) == 2
+    assert "已结束" in (await click(ipc, "select", "stale", task=ended))["error"]
+    await click(ipc, "history", "history")
+    assert ended in json.dumps(last_card(s))
+    await click(ipc, "history_status", "result", task=ended)
+    assert session(s)["current_task"] is None
+    assert s.db.task(ended)["prompt"]
+
+
+async def test_double_click_preserves_flow_and_coalesces_unsent_guides(service):
+    s, ipc = service, IPCServer(service)
+    await click(ipc, "create", "first")
+    flow = session(s)["flow"]
+    for i in range(20):
+        r = await click(ipc, "create", f"repeat{i}")
+        assert "无需重复" in r["message"]
+    assert session(s)["flow"] == flow
+    assert len(s.db.all("SELECT * FROM outbox WHERE kind='ui'")) == 1
+    await click(ipc, "list", "switch")
+    assert len(s.db.all("SELECT * FROM outbox WHERE kind='ui' AND status='pending'")) == 1
+    assert s.db.one("SELECT count(*) n FROM dedup WHERE status='processing'")["n"] == 0
+
+
+async def test_slow_command_does_not_queue_more_clicks_or_block_queries(service):
+    s, ipc = service, IPCServer(service)
+    tid = await active(s)
+    await click(ipc, "select", "select", task=tid)
+    await click(ipc, "command", "command")
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = s.rpc.call
+    async def slow(method, params):
+        entered.set()
+        await release.wait()
+        return await original(method, params)
+    s.rpc.call = slow
+    pending = asyncio.create_task(text(ipc, "修改程序", "slow"))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        r = await asyncio.wait_for(click(ipc, "list", "busy"), 0.5)
+        assert "正在处理" in r["error"]
+        r = await asyncio.wait_for(text(ipc, f"status {tid}", "query"), 0.5)
+        assert r["id"] == tid
+        r = await asyncio.wait_for(ipc.remote({"actor": "ou_other", "event_id": "other", "menu": "list_tasks"}), 0.5)
+        assert "error" not in r
+    finally:
+        release.set()
+        await pending
+
+
+async def test_cancel_during_running_hidden_even_after_recovery(service):
+    s = service
+    tid = await active(s)
+    await s.execute({"op": "cancel", "task": tid})
+    assert s.db.task(tid)["status"] == "cancelling"
+    assert await s.execute({"op": "tasks"}) == []
+    s.recover("test restart")
+    assert await s.execute({"op": "tasks"}) == []
+    with pytest.raises(UserError, match="已取消"):
+        await s.execute({"op": "append", "task": tid, "text": "不能复活"})
+
+
+async def test_existing_database_migrates_cancelled_history(service, tmp_path):
+    from conftest import create
+
+    from feishu_codex.store import Store
+    s = service
+    tid = await create(s)
+    await click(IPCServer(s), "select", "select", task=tid)
+    s.db.update(tid, status="cancelled")
+    s.db.run("ALTER TABLE tasks DROP COLUMN closed")
+    migrated = Store(tmp_path / "state.sqlite3", s.db.redact)
+    try:
+        assert migrated.task(tid)["closed"] == 1
+        assert migrated.one("SELECT current_task FROM ui_sessions")["current_task"] is None
+    finally:
+        migrated.db.close()

@@ -35,7 +35,8 @@ def card(title, elements):
 class Wizard:
     def __init__(self, service):
         self.s = service
-        self.lock = asyncio.Lock()
+        self.locks = {}
+        self.recent = {}
 
     def session(self, actor, chat):
         db = self.s.db
@@ -98,21 +99,22 @@ class Wizard:
         return card("创建任务 · 1/2 选择目录", [div(
             f"默认根目录：{root}\n点击已有目录，或直接发送一个新名字（如 weather-demo），新目录将在创建任务时自动建立。\n已有目录 {len(names)} 个。发送“取消向导”退出。")] + actions(buttons))
 
-    def task_list(self, row, offset=0):
+    def task_list(self, row, offset=0, history=False):
         offset = max(0, int(offset))
-        tasks = self.s.db.all("SELECT id,prompt,status FROM tasks WHERE owner=? ORDER BY created DESC LIMIT 13 OFFSET ?", (row["owner"], offset))
-        elements = [div("点击标签明确切换当前上下文；不会自动选择最后一个任务。")]
+        tasks = self.s.db.all("SELECT id,prompt,status FROM tasks WHERE owner=? AND closed=? ORDER BY created DESC LIMIT 13 OFFSET ?", (row["owner"], int(history), offset))
+        elements = [div("已结束任务仅供查看历史，不能重新选为当前任务。" if history else "点击标签明确切换当前上下文；已结束任务请在历史中查看。")]
         for t in tasks[:12]:
             elements += [div(f"{t['id']} · {t['status']}\n{t['prompt'][:120]}")]
-            elements += actions([button("选择此任务", "select", task=t["id"])])
+            elements += actions([button("查看结果" if history else "选择此任务", "history_status" if history else "select", task=t["id"])])
         if not tasks:
-            elements.append(div("还没有任务，点击下方创建。"))
-        navigation = [button("创建任务", "create")]
+            elements.append(div("没有已结束任务。" if history else "没有未结束的任务，点击下方创建。"))
+        navigation = [button("创建任务", "create"), button("当前任务" if history else "已结束任务", "list" if history else "history")]
+        list_action = "history" if history else "list"
         if len(tasks) > 12:
-            navigation.append(button("下一页", "list", offset=offset + 12))
+            navigation.append(button("下一页", list_action, offset=offset + 12))
         if offset:
-            navigation.append(button("第一页", "list", offset=0))
-        return card("任务列表 · 选择上下文", elements + actions(navigation))
+            navigation.append(button("第一页", list_action, offset=0))
+        return card("已结束任务 · 历史" if history else "任务列表 · 选择上下文", elements + actions(navigation))
 
     async def handle(self, req):
         actor = req["actor"]
@@ -133,8 +135,17 @@ class Wizard:
         explicit = explicit or text.startswith(("create --", "append ", "continue "))
         if not action and (text.startswith("/") or explicit):
             return None
-        async with self.lock:
+        lock = self.locks.setdefault(actor, asyncio.Lock())
+        if lock.locked():
+            raise UserError("上一项操作正在处理，请稍候；可发送 status <任务编号> 查询，不必连续点击")
+        async with lock:
             row = self.session(actor, req.get("chat"))
+            signature = encode([action, value])
+            recent = self.recent.get(actor)
+            if action in ("create", "list", "history", "command", "end", "select") and recent:
+                sig, flow, at, result = recent
+                if sig == signature and flow == row["flow"] and time.monotonic() - at < 1:
+                    return {**result, "repeated": True}
             if action in ("command", "end", "status") and "task" in value and value["task"] != row["current_task"]:
                 raise UserError("此卡片对应的任务已不是当前任务，请在任务列表重新选择")
             if not action and row["expires"] < time.time():
@@ -177,17 +188,19 @@ class Wizard:
                 row["current_task"] = result["task"]
                 self.stage(row, "idle")
                 output = self.home(row, "任务已创建并排队。后续进展、审批和结果会通过卡片/消息通知。")
-            elif action == "list":
+            elif action in ("list", "history"):
                 self.stage(row, "idle")
-                output = self.task_list(row, value.get("offset", 0))
+                output = self.task_list(row, value.get("offset", 0), history=action == "history")
             elif action == "select":
-                self.s.check(actor, value.get("task"))
+                t = self.s.check(actor, value.get("task"))
+                if t["closed"]:
+                    raise UserError("该任务已结束；请在“已结束任务”查看结果，或创建新任务")
                 row["current_task"] = value["task"]
                 self.stage(row, "idle")
                 output = self.home(row, "已切换到所选任务。")
             elif action == "command":
                 t = self.context(row, mutation=True)
-                if t["status"] == "cancelled":
+                if t["closed"]:
                     raise UserError("所选任务已结束，请创建或选择其他任务")
                 self.stage(row, "command", {"task": t["id"]})
                 output = card("输入命令 · 追加当前任务要求", [div(
@@ -206,8 +219,13 @@ class Wizard:
                 if row["stage"] != "confirm_end" or json.loads(row["data"]).get("task") != value.get("task"):
                     raise UserError("当前上下文已改变，请重新选择要结束的任务")
                 await self.s.execute({"op": "cancel", "task": value["task"]}, actor)
+                row["current_task"] = None
                 self.stage(row, "idle")
-                output = self.home(row, "已请求结束任务；可查询最终状态。")
+                output = self.home(row, "已请求结束任务，并移入“任务列表 → 已结束任务”；当前上下文已清除。")
+            elif action == "history_status":
+                t = self.s.check(actor, value.get("task"))
+                output = card("历史任务结果", [div(f"任务：{t['id']} · {t['status']}\n目录：{t['cwd']}\n{t['summary'][:6000] or '暂无结果'}")]
+                              + actions([button("已结束任务", "history"), button("任务列表", "list")]))
             elif action == "status":
                 t = self.context(row)
                 status = self.s.status(t["id"])
@@ -219,4 +237,6 @@ class Wizard:
                 output = self.home(row, note)
             else:
                 raise UserError("当前正在等待按钮确认；也可发送“取消向导”重新开始")
-            return {"task": row["current_task"], "stage": row["stage"], "card": output, "destination": row["chat"]}
+            result = {"task": row["current_task"], "stage": row["stage"], "card": output, "destination": row["chat"]}
+            self.recent[actor] = (signature, row["flow"], time.monotonic(), result)
+            return result

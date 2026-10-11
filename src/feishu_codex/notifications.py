@@ -84,6 +84,9 @@ class Outbox:
         rows = s.db.all("SELECT * FROM outbox WHERE status='pending' AND next_at<=?" + clause + " ORDER BY rowid LIMIT 50",
                         (time.time(), *paused))
         for row in rows:
+            current = s.db.one("SELECT status,version FROM outbox WHERE id=?", (row["id"],))
+            if current["status"] != "pending" or current["version"] != row["version"]:
+                continue
             if row["task"] in s.leases:
                 continue
             if row["kind"] == "progress":
