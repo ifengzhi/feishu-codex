@@ -1,0 +1,24 @@
+[Unit]
+Description=Feishu Codex persistent task service
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT@
+ExecStart=@PROJECT@/.venv/bin/feishu-codex --config @CONFIG@ serve
+Environment=PATH=@PATH@
+UMask=0077
+Restart=always
+RestartSec=10
+TimeoutStopSec=20
+KillMode=control-group
+# Do not use ProtectHome/PrivateTmp/NoNewPrivileges here: Codex owns its sandbox,
+# reads the existing user config and launches its supported sandbox helpers.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,22 @@
+# Copy to ~/.config/feishu-codex/config.toml; chmod 600. Never put credentials in Git.
+work_roots = ["~/remote-ws", "~/ws"] # First root is used by the button wizard
+data_dir = "~/.local/share/feishu-codex"
+socket_path = "~/.local/share/feishu-codex/control.sock"
+codex_command = ["/home/zhi/.npm-global/bin/codex", "app-server", "--stdio"]
+# Existing authentication, model and provider are inherited, never overwritten.
+approval_policy = "on-request" # or "untrusted" for more frequent human review
+sandbox = "workspace-write"   # or "read-only"; unrestricted sandbox is disallowed
+rpc_timeout = 45
+turn_timeout = 7200
+approval_timeout = 1800
+interrupt_timeout = 15 # Kill owning app-server if interrupt has no completion event
+lease_timeout = 30
+progress_interval = 30
+notification_retries = 4
+log_max_bytes = 2097152
+log_backups = 3
+
+[feishu]
+app_id = ""
+app_secret = ""
+allowed_users = [] # open_id values (ou_...), empty denies all remote access
