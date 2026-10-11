@@ -17,6 +17,7 @@ class FakeRPC:
         self.ready = True
         self.cwd = None
         self.stopped = False
+        self.initialize_result = {"userAgent": "fake-codex/0.160.0", "platformOs": "linux", "platformFamily": "unix", "codexHome": "/tmp/fake-codex"}
 
     async def call(self, method, params):
         self.calls.append((method, params))

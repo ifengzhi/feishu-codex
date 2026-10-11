@@ -24,6 +24,8 @@ class IPCServer:
         self.wizard = Wizard(service)
 
     async def start(self):
+        from .native import clean_native_sockets
+        clean_native_sockets(self.s.cfg)
         path = self.s.cfg.socket_path
         if os.path.lexists(path):
             if not stat.S_ISSOCK(os.lstat(path).st_mode):
@@ -33,6 +35,10 @@ class IPCServer:
         os.chmod(path, 0o600)
 
     async def close(self):
+        endpoints = list(self.s.native.values())
+        for endpoint in endpoints:
+            endpoint.disconnect()
+        await asyncio.gather(*(e.cleanup for e in endpoints if e.cleanup), return_exceptions=True)
         self.server.close()
         await self.server.wait_closed()
         for writer in list(self.connections):
@@ -56,6 +62,10 @@ class IPCServer:
                     op, tid = req.get("op"), req.get("task")
                     if op == "attach":
                         result = self.s.acquire(tid, token)
+                        attached.add(tid)
+                    elif op == "native_attach":
+                        from .native import open_native
+                        result = await open_native(self.s, tid, token)
                         attached.add(tid)
                     elif op == "heartbeat":
                         self.s.heartbeat(tid, token)

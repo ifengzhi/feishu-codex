@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from websockets.asyncio.client import unix_connect
+from websockets.exceptions import ConnectionClosed
 
 from feishu_codex.config import UserError, load_config
 from feishu_codex.ipc import Client
@@ -126,7 +128,7 @@ async def test_terminal_interface_exit_preserves_task(daemon, exit_mode):
     await until(c, tid, {"waiting"})
     config_file = Path(cfg.data_dir).parent / "config.toml"
     terminal = await asyncio.create_subprocess_exec(sys.executable, "-m", "feishu_codex.cli", "--config", str(config_file),
-        "attach", tid, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        "attach", "--plain", tid, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
         async with asyncio.timeout(5):
             while (await c.call({"op": "status", "task": tid}))["control"] != "terminal":
@@ -150,3 +152,64 @@ async def test_terminal_interface_exit_preserves_task(daemon, exit_mode):
             terminal.kill()
             await terminal.wait()
         await c.close()
+
+
+async def test_native_lifecycle(daemon):
+    from test_native import call, receive
+    cfg, start = daemon
+    _, c = await start()
+    tid = (await c.call({"op": "create", "cwd": "native", "mkdir": True, "text": "approval"}))["task"]
+    t = await until(c, tid, {"waiting"})
+    info = await c.call({"op": "native_attach", "task": tid})
+    reader = await Client(cfg).connect()
+    try:
+        async with unix_connect(info["endpoint"].removeprefix("unix://")) as ws:
+            await call(ws, "initialize")
+            await call(ws, "thread/resume", {"threadId": t["thread"]})
+            prompt = await receive(ws, lambda m: "id" in m and "method" in m)
+            assert prompt["method"] == "item/commandExecution/requestApproval"
+            assert (await reader.call({"op": "status", "task": tid}))["control"] == "terminal"
+            await c.close()  # Launcher death releases the lease even if TUI socket is still alive.
+            with pytest.raises(ConnectionClosed):
+                await ws.recv()
+        status = await reader.call({"op": "status", "task": tid})
+        assert status["control"] == "available" and status["requests"][0]["status"] == "pending"
+        info = await reader.call({"op": "native_attach", "task": tid})
+        async with unix_connect(info["endpoint"].removeprefix("unix://")) as ws:
+            await call(ws, "initialize")
+            await call(ws, "thread/resume", {"threadId": t["thread"]})
+            same = await receive(ws, lambda m: "id" in m and "method" in m)
+            assert same["id"] == prompt["id"]
+            await ws.send(json.dumps({"id": same["id"], "result": {"decision": "accept"}}))
+            await receive(ws, lambda m: m.get("method") == "serverRequest/resolved")
+            await until(reader, tid, {"completed"})
+    finally:
+        await c.close()
+        await reader.close()
+
+
+async def test_native_restart(daemon):
+    from test_native import call, receive
+    cfg, start = daemon
+    proc, c = await start()
+    tid = (await c.call({"op": "create", "cwd": "native", "mkdir": True, "text": "approval"}))["task"]
+    t = await until(c, tid, {"waiting"})
+    info = await c.call({"op": "native_attach", "task": tid})
+    path = Path(info["endpoint"].removeprefix("unix://"))
+    async with unix_connect(str(path)) as ws:
+        await call(ws, "initialize")
+        await call(ws, "thread/resume", {"threadId": t["thread"]})
+        await receive(ws, lambda m: "id" in m and "method" in m)
+        proc.kill()
+        await proc.wait()
+        await c.close()
+        with pytest.raises(ConnectionClosed):
+            await ws.recv()
+    _, fresh = await start()
+    try:
+        assert not path.exists()
+        status = await fresh.call({"op": "status", "task": tid})
+        assert status["status"] == "interrupted" and status["control"] == "available"
+        assert status["requests"][0]["status"] == "invalidated"
+    finally:
+        await fresh.close()

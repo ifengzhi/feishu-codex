@@ -16,7 +16,7 @@ def expand(value):
 
 @dataclass
 class Config:
-    work_roots: list = field(default_factory=lambda: [str(Path.home() / "remote-ws"), str(Path.home() / "ws")])
+    work_roots: list = field(default_factory=lambda: [str(Path.home() / "ws"), str(Path.home() / "remote-ws")])
     data_dir: str = str(Path.home() / ".local/share/feishu-codex")
     socket_path: str = ""
     codex_command: list = field(default_factory=lambda: ["codex", "app-server", "--stdio"])

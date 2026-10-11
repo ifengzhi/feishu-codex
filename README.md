@@ -11,8 +11,8 @@
 | 项目源码 | `/home/zhi/ws/feishu-codex` |
 | 私有配置 | `~/.config/feishu-codex/config.toml`，权限 `600` |
 | SQLite、运行日志、IPC | `~/.local/share/feishu-codex/`，目录权限 `700` |
-| 按钮向导的项目目录 | `~/remote-ws/<名字>` |
-| 额外允许的工作根目录 | `~/ws` |
+| 按钮向导的项目目录 | `~/ws/<名字>` |
+| 额外允许的工作根目录（兼容旧任务） | `~/remote-ws` |
 | 用户服务 | `~/.config/systemd/user/feishu-codex.service` |
 | 命令 | `~/.local/bin/feishu-codex` |
 
@@ -125,7 +125,7 @@ feishu-codex doctor
 
 | 按钮 | 操作 |
 | --- | --- |
-| 创建任务 | 第一步列出 `~/remote-ws/` 下已有目录；点击选择，或发送一个新名字。第二步发送自然语言任务描述，立即创建并排队执行 |
+| 创建任务 | 第一步列出 `~/ws/` 下已有目录；点击选择，或发送一个新名字。第二步发送自然语言任务描述，立即创建并排队执行 |
 | 输入命令 | 显示当前任务和目录，等待你发送后续要求；运行中进入 `turn/steer`，空闲时在同一会话开启后续 turn |
 | 任务列表 | 分页显示本人未结束的任务；点击“选择此任务”切换上下文；“已结束任务”入口查看历史结果 |
 | 结束任务 | 确认后中断任务、使未处理审批失效、清除当前上下文并移入历史；保留文件和历史 |
@@ -137,7 +137,7 @@ feishu-codex doctor
 
 连续一秒内重复点击同一导航按钮会合并，不重置输入步骤；未发出的旧向导卡会被新步骤替代，审批卡不受影响。同一用户有操作未完成时，新向导操作会立即提示忙碌，可用 `status <任务编号>` 查询。慢回调通过线程处理，不阻塞长连接事件循环。`doctor` 的 `remote_events_processing`、`notifications_pending`、`notification_failures` 可辅助区分处理等待与通知积压；网络或 Codex 请求超时时，先查询状态，不重复批准或提交。
 
-目录向导只需输入 `weather-demo` 这样的单个名字，即 `~/remote-ws/weather-demo`；新名字自动创建，已有名字复用。目录列表分页，不显示越界符号链接。需要自定义完整路径、历史会话 ID 或幂等键时，可使用后面的命令模式。向导状态和明确选中的任务会持久化；输入步骤有效期为 30 分钟，旧目录卡片和旧结束确认不能误作用于新上下文。发送 **`取消向导`** 只退出输入步骤，不取消任务。完整命令可用 `/` 开头以跳出输入步骤。
+目录向导只需输入 `weather-demo` 这样的单个名字，即 `~/ws/weather-demo`；新名字自动创建，已有名字复用。目录列表分页，不显示越界符号链接。需要自定义完整路径、历史会话 ID 或幂等键时，可使用后面的命令模式。向导状态和明确选中的任务会持久化；输入步骤有效期为 30 分钟，旧目录卡片和旧结束确认不能误作用于新上下文。发送 **`取消向导`** 只退出输入步骤，不取消任务。完整命令可用 `/` 开头以跳出输入步骤。
 
 ### 3.2 飞书底部固定菜单（需要在开发者后台配置）
 
@@ -173,7 +173,7 @@ answer 任务编号 问题请求编号 {"问题ID":["你的回答"]}
 ## 4. 手机创建 → 审批 → Terminal 接管 → 查询结果
 
 1. 飞书私聊发送“菜单”，点击 **创建任务**。
-2. 在目录步骤发送 `weather-demo`；应用将使用 `/home/zhi/remote-ws/weather-demo`。也可以点击列表中的已有目录。
+2. 在目录步骤发送 `weather-demo`；应用将使用 `/home/zhi/ws/weather-demo`。也可以点击列表中的已有目录。
 3. 在描述步骤发送：
 
    ```text
@@ -190,17 +190,17 @@ answer 任务编号 问题请求编号 {"问题ID":["你的回答"]}
    feishu-codex attach a1b2c3d4e5f6
    ```
 
-6. 终端显示历史和后续进展。在界面中可输入：
+6. 默认进入 **官方 Codex CLI 界面**，显示同一会话的历史和实时进展。直接输入自然语言要求；授权和普通问题通过 Codex 原生交互处理。首次进入未信任的目录，Codex 会显示目录信任确认；它与模型操作授权不同，只有本人确认后才记录该目录的信任。不要在原生界面输入简易控制台专用的 `/append`、`/decide`、`/detach`。
+
+   原生界面示例：
 
    ```text
-   /append 增加 JSON 输出选项，并补对应测试
+   增加 JSON 输出选项，并补对应测试
    /status
-   /decide 此处填写真实请求编号 accept
-   /answer 此处填写真实问题请求编号 {"问题ID":["你的回答"]}
-   /detach
+   /quit
    ```
 
-7. `/detach` 或 **Ctrl+C** 只退出界面并释放控制权，后台继续运行。此任务在接管期间暂停飞书主动通知，其他任务不受影响；飞书仍可查询。飞书对该任务的修改和审批会明确返回 Terminal 控制中。释放或断线后恢复通知，未解决审批按原记录补发/更新，积压进度会合并。
+7. 原生界面用 **`/quit`** 退出并释放控制权，后台任务继续。**Ctrl+C 遵循 Codex 原生行为，运行中可能中断当前 turn，不再等同于退出。** 此任务在接管期间暂停飞书主动通知，其他任务不受影响；飞书仍可查询。飞书对该任务的修改和审批会明确返回 Terminal 控制中。释放或断线后恢复通知，未解决审批按原记录补发/更新，积压进度会合并。
 8. 在手机上点击 **任务列表 → 选择此任务 → 查询结果**，或在电脑执行：
 
    ```bash
@@ -214,7 +214,7 @@ answer 任务编号 问题请求编号 {"问题ID":["你的回答"]}
 机器人私聊及本地命令使用相同语义。本地调用在命令前加 `feishu-codex`：
 
 ```text
-create --workdir ~/remote-ws/demo --mkdir --key phone-demo-1 -- 实现一个程序并补测试
+create --workdir ~/ws/demo --mkdir --key phone-demo-1 -- 实现一个程序并补测试
 create --workdir demo --mkdir --thread 历史会话ID -- 先检查历史与当前文件，再按这些新要求继续
 tasks
 status 任务编号
@@ -231,7 +231,7 @@ help
 在 shell 中建议将目录的 `~` 路径和正文引用，例如：
 
 ```bash
-feishu-codex create --workdir '~/remote-ws/demo' --mkdir --key demo-1 -- '实现 hello.py，补 README 和测试，不推送'
+feishu-codex create --workdir '~/ws/demo' --mkdir --key demo-1 -- '实现 hello.py，补 README 和测试，不推送'
 ```
 
 工作路径正确展开 Home，规范化后检查配置根目录和符号链接目标；相对路径位于 `work_roots` 第一项。不存在的目录必须显式 `--mkdir`（按钮向导输入名字即表示创建）；无效路径报错，不回退到其他目录。历史会话的实际 cwd 必须与目标相同，已有任务绑定的会话不能再绑定第二个任务。
@@ -244,7 +244,9 @@ feishu-codex create --workdir '~/remote-ws/demo' --mkdir --key demo-1 -- '实现
 flowchart LR
     F[飞书私聊/卡片/菜单] --> W[官方 SDK 长连接进程]
     W --> U[受保护 Unix socket]
-    T[Terminal 控制台] --> U
+    T[官方 Codex CLI] --> N[按任务绑定的 Unix WebSocket]
+    N --> B
+    P[简易终端 --plain] --> U
     U --> B[独立任务后台]
     B <--> D[(SQLite)]
     B <--> C[Codex app-server stdio]
@@ -252,7 +254,13 @@ flowchart LR
     O --> A[飞书 API]
 ```
 
-后台独占 app-server 的 stdin/stdout，默认全局串行执行。查询不需要获得修改锁，等待审批不阻塞状态查询。飞书长连接在单独子进程运行，SDK 断线自动重连；进程退出由后台限速重启。终端通过同一 UID 的 Unix socket 接入，socket 为 `600`，有连接级控制租约和心跳；终端不运行另一个 Codex，也不用 `codex resume` 假装附着。
+后台独占 app-server 的 stdin/stdout，默认全局串行执行。查询不需要获得修改锁，等待审批不阻塞状态查询。飞书长连接在单独子进程运行，SDK 断线自动重连；进程退出由后台限速重启。终端通过同一 UID 的 Unix socket 接入，socket 为 `600`，有连接级控制租约和心跳。
+
+`feishu-codex attach <任务编号>` 启动官方 `codex resume --remote unix://... <threadId>` 界面，连接后台为该任务建立的临时协议入口。后台仍管理同一个 app-server 和 turn；进入界面不会新建任务或另启模型执行进程。入口只允许当前绑定任务，审批转换为共享数据库记录并验证一次性决定；运行中追加走 `turn/steer`，空闲时启动原会话后续 turn。socket 断开、控制连接断开、租约过期或 app-server 重启后入口关闭；退出不会重放请求。参考 [官方 CLI remote 参数](https://learn.chatgpt.com/docs/developer-commands?surface=cli) 和 [app-server Unix socket 协议](https://learn.chatgpt.com/docs/app-server)。
+
+原生接管保留项目目录、模型服务、沙箱和人工审批策略。`/new`、切换其他会话、修改全局配置、直接进程执行等绕过任务管理的协议操作会明确拒绝；切换任务请先 `/quit`，再 attach 对应编号。只支持本次命令/文件批准、当前 turn 权限和普通问题；选择会话级永久批准等不支持的决定会拒绝并断开界面，原请求保留供重新处理。首次目录信任仅允许写入当前任务的 `projects.<目录>.trust_level`，不覆盖认证或模型配置。
+
+无需原生界面或在管道环境中操作时，使用 `feishu-codex attach --plain <任务编号>`。简易界面仍支持 `/append`、`/decide`、`/answer`、`/interrupt`、`/cancel`、`/detach`，且 Ctrl+C 仍为退出界面并继续后台任务。两个界面共用同一控制权，不能同时接管。任务尚未创建 thread 时需等排队启动；已结束任务或目录已删除时用 `status` 查询历史。
 
 SQLite 持久化任务、thread/turn、关键操作与完成消息、审批元数据、事件去重、向导上下文和通知状态。不保存原始逐 token 输出/内部推理，不生成 Markdown 任务报告或 `reports/`。实际任务产出的 README 等项目文件位于任务目录。
 
@@ -315,7 +323,7 @@ bash scripts/check-protocol.sh
 .venv/bin/ruff check src tests scripts
 ```
 
-本机模拟与协议回归结果：**48 passed**，静态检查通过。模拟测试不读取真实飞书配置、不发真实消息、不调用模型。覆盖新目录与符号链接边界、串行执行、继续/steer/取消、批准/拒绝/重复/过期/错误归属、普通用户输入、幂等和去重、SQLite 恢复、真实 Unix socket 断开、后台进程被杀后恢复、终端接管与通知暂停恢复、通知失败与积压隔离、凭据脱敏、真实 SDK 消息/卡片/菜单帧和请求构造、按钮向导/上下文/旧卡片失效。新增结束任务隐藏及历史查询、旧数据库迁移、取消期间重启、连续点击合并、过时通知跳过、慢请求下查询与其他用户操作、EVENT/CARD 回调不阻塞事件循环的回归。SDK 内置 protobuf 有两条 Python 弃用警告，不影响通过。
+本机模拟与协议回归结果：**66 passed**，静态检查通过。模拟测试不读取真实飞书配置、不发真实消息、不调用模型。覆盖新目录与符号链接边界、串行执行、继续/steer/取消、批准/拒绝/重复/过期/错误归属、普通用户输入、幂等和去重、SQLite 恢复、真实 Unix socket 断开、后台进程被杀后恢复、终端接管与通知暂停恢复、通知失败与积压隔离、凭据脱敏、真实 SDK 消息/卡片/菜单帧和请求构造、按钮向导/上下文/旧卡片失效。还覆盖结束任务归档、连续点击和慢回调、原生终端的 Unix WebSocket 握手与事件、仅绑定任务访问、沙箱/配置写入约束、共享审批及权限子集、重复请求不重放、串行执行、租约释放、启动失败、恢复期间事件缓冲、真实后台被杀后旧终端及审批失效、遗留 socket 清理和默认 `~/ws`。SDK 内置 protobuf 有两条 Python 弃用警告，不影响通过。
 
 `scripts/audit-secrets.py` 会以不输出凭据值的方式检查 Git 跟踪文件及本应用日志/数据库中是否存在本机已知凭据。本机检查未发现已知凭据进入上述内容；私有配置与运行数据均不在 Git 中。
 
@@ -328,6 +336,18 @@ bash scripts/check-protocol.sh
 ```
 
 已实际完成：初始化、`thread/start` 指定不存在目录创建后的 cwd、`turn/start` 创建 hello.py/README 并运行得到 42、同 thread 后续 turn、重启后 `thread/read` + `thread/resume`、systemd 服务通过 IPC 执行模型任务。临时项目在测试结束后删除；持久服务的本地测试任务记录会保留，目录已删除的测试记录不能继续执行。
+
+原生终端还通过了真实 Codex 0.160.0 的 PTY 验证：后台建立并执行会话后，官方界面显示历史、提交后续 turn；运行中接管并通过 `turn/steer` 追加而不创建新 turn；运行中 `/quit` 退出后，原后台 turn 继续并完成，控制权释放。验证沿用现有模型服务和认证，不发飞书消息。测试只对自己生成的空临时项目在内存中的配置读取结果标记信任，不写入用户 Codex 配置，不自动批准模型工具请求；真实使用时仍由本人确认目录信任。
+
+可重复执行（会调用现有模型服务，创建并清理临时目录）：
+
+```bash
+.venv/bin/python scripts/native-smoke.py --turn
+.venv/bin/python scripts/native-smoke.py --steer-running
+.venv/bin/python scripts/native-smoke.py --detach-running
+```
+
+原生终端审批/普通问题的共享记录与权限校验已由模拟协议测试覆盖；手机真实审批与原生终端来回切换仍需用户在实际请求出现时验收，不把无凭据/模拟测试写成真实飞书端到端成功。
 
 **配置后待验收**：本人加入白名单；手机“菜单”卡片和底部四个菜单；实际飞书目录选择及任务描述；手机真实审批/拒绝与卡片更新；飞书普通输入；手机与 Terminal 切换；真实通知和限流失败恢复。长连接握手成功仅证明连接，不代表上述交互已验收。本机未发送未经请求的试探消息。
 

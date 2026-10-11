@@ -15,6 +15,20 @@ INSTRUCTIONS = """在指定任务目录内工作，按要求完成源码、READM
 不要读取、输出或提交凭据。保持沙箱和人工审批，不绕过权限限制。"""
 
 
+def permission_subset(granted, requested):
+    """Conservative structural subset; never synthesize a broader filesystem grant."""
+    if granted is None:
+        return True
+    if isinstance(granted, dict):
+        return isinstance(requested, dict) and all(
+            v is None or k in requested and permission_subset(v, requested[k]) for k, v in granted.items())
+    if isinstance(granted, list):
+        return isinstance(requested, list) and all(x in requested for x in granted)
+    if isinstance(granted, bool):
+        return isinstance(requested, bool) and (not granted or requested)
+    return type(granted) is type(requested) and granted == requested
+
+
 class Service:
     def __init__(self, config, store, rpc=None):
         self.cfg, self.db = config, store
@@ -32,8 +46,11 @@ class Service:
         self.closing = False
         self.feishu_state = "未配置" if not config.feishu_configured else "等待长连接"
         self.feishu_seen = 0
+        self.native = {}  # task -> task-scoped official CLI protocol endpoint
 
     def recover(self, why="后台重启；原进程的活动 turn 无法实时恢复，旧审批失效；请查询后明确继续"):
+        for endpoint in list(self.native.values()):
+            endpoint.disconnect()
         for t in self.db.all("SELECT * FROM tasks WHERE status IN ('starting','running','waiting','cancelling')"):
             self.db.update(t["id"], status="interrupted", summary=why)
             self.db.event(t["id"], "interrupted", why)
@@ -63,7 +80,7 @@ class Service:
             self.release(tid, lease[0])
             lease = None
         if mutation and lease and (remote or token != lease[0]):
-            raise UserError("任务由 Terminal 控制；飞书仅可查询，请先在终端 /detach")
+            raise UserError("任务由 Terminal 控制；飞书仅可查询，请先退出接管界面")
         return t
 
     def acquire(self, tid, token):
@@ -79,6 +96,9 @@ class Service:
     def release(self, tid, token):
         if tid in self.leases and self.leases[tid][0] == token:
             del self.leases[tid]
+            endpoint = self.native.get(tid)
+            if endpoint and endpoint.token == token:
+                endpoint.disconnect()
             t = self.db.task(tid)
             self.db.notify(f"{tid}:release:{token}", tid, t["chat"], "control",
                            f"Terminal 已释放控制权。状态：{t['status']}\n{t['summary']}")
@@ -117,6 +137,8 @@ class Service:
                     "remote_users": len(self.cfg.feishu.get("allowed_users", [])),
                     "work_roots": self.cfg.work_roots, "data_dir": self.cfg.data_dir,
                     "socket": self.cfg.socket_path, "protocol": "codex-cli 0.160.0",
+                    "terminal_interface": "native Codex CLI (attach --plain for text console)",
+                    "native_connections": len(self.native),
                     "remote_events_processing": self.db.one("SELECT count(*) n FROM dedup WHERE status='processing'")["n"],
                     "notifications_pending": self.db.one("SELECT count(*) n FROM outbox WHERE status='pending'")["n"],
                     "notification_failures": self.db.one("SELECT count(*) n FROM outbox WHERE status='failed'")["n"]}
@@ -132,7 +154,7 @@ class Service:
             if op in ("cancel", "interrupt"):
                 return await self.interrupt(tid, cancel=op == "cancel")
             if op == "decide":
-                return await self.decide(tid, req.get("request"), req.get("decision"))
+                return await self.decide(tid, req.get("request"), req.get("decision"), permissions=req.get("permissions"))
             if op == "answer":
                 return await self.decide(tid, req.get("request"), answers=req.get("answers"))
             raise UserError("未知操作；使用 help 查看命令")
@@ -222,13 +244,16 @@ class Service:
         self.db.run("UPDATE requests SET status=? WHERE id=? AND status IN ('pending','responding')", (state, rid))
         self.live_requests.pop(rid, None)
         self.request_notice(rid)
+        endpoint = self.native.get(self.db.one("SELECT task FROM requests WHERE id=?", (rid,))["task"])
+        if endpoint:
+            endpoint.resolved(rid)
 
     def request_notice(self, rid):
         r = self.db.one("SELECT * FROM requests WHERE id=?", (rid,))
         t = self.db.task(r["task"])
         self.db.notify("request:" + rid, t["id"], t["chat"], "request", {"request": rid}, refresh=True)
 
-    async def decide(self, tid, rid, decision=None, answers=None):
+    async def decide(self, tid, rid, decision=None, answers=None, permissions=None):
         r = self.db.one("SELECT * FROM requests WHERE id=?", (rid,))
         if not r or r["task"] != tid:
             raise UserError("审批/问题编号与任务不匹配")
@@ -253,7 +278,10 @@ class Service:
             if answers is not None or decision not in json.loads(r["decisions"]):
                 raise UserError("决定不在此请求允许的范围内")
             if r["method"] == "item/permissions/requestApproval":
-                result = {"permissions": p["permissions"] if decision == "accept" else {}, "scope": "turn"}
+                granted = p["permissions"] if permissions is None else permissions
+                if not isinstance(granted, dict) or not permission_subset(granted, p["permissions"]):
+                    raise UserError("不能批准超出本次请求范围的权限")
+                result = {"permissions": granted if decision == "accept" else {}, "scope": "turn"}
             else:
                 result = {"decision": decision}
         # Persist the claim before writing; a crash never replays a decision.
@@ -266,7 +294,11 @@ class Service:
         self.db.run("UPDATE requests SET status='resolved' WHERE id=?", (rid,))
         self.live_requests.pop(rid, None)
         self.request_notice(rid)
-        self.db.event(tid, "request_resolved", {"request": rid, "decision": decision or "answered"})
+        endpoint = self.native.get(tid)
+        if endpoint:
+            endpoint.resolved(rid)
+        self.db.event(tid, "request_resolved", {"request": rid, "decision": decision or "answered",
+                                              **({"permissions": result["permissions"], "scope": "turn"} if "permissions" in result else {})})
         if not self.db.one("SELECT id FROM requests WHERE task=? AND status='pending'", (tid,)) and t["status"] == "waiting":
             self.db.update(tid, status="running")
         return {"task": tid, "request": rid, "status": "resolved"}
@@ -284,6 +316,9 @@ class Service:
             if self.db.one("SELECT id FROM tasks WHERE status IN ('starting','running','waiting','cancelling')"):
                 continue
             async with self.lock:
+                # A native CLI may have started a turn while this worker awaited the lock.
+                if self.db.one("SELECT id FROM tasks WHERE status IN ('starting','running','waiting','cancelling')"):
+                    continue
                 t = self.db.one("SELECT * FROM tasks WHERE status='queued' ORDER BY updated LIMIT 1")
                 if not t:
                     continue
@@ -339,6 +374,11 @@ class Service:
                 self.recover("协议事件处理异常，已停止 app-server；检查后明确继续")
 
     async def on_event(self, msg):
+        await self._on_event(msg)
+        for endpoint in list(self.native.values()):
+            endpoint.publish(msg)
+
+    async def _on_event(self, msg):
         method, p = msg["method"], msg.get("params", {})
         if method == "_disconnected":
             self.connected = False
@@ -354,6 +394,7 @@ class Service:
         tid = t["id"]
         if method == "turn/started":
             self.db.update(tid, turn=p["turn"]["id"], status="running")
+            self.started_at[tid] = time.monotonic()
         elif method == "serverRequest/resolved":
             for r in self.db.all("SELECT id FROM requests WHERE task=? AND rpc_id=? AND epoch=? AND status='pending'",
                                  (tid, encode(p["requestId"]), self.rpc.epoch)):

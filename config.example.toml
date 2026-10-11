@@ -1,5 +1,5 @@
 # Copy to ~/.config/feishu-codex/config.toml; chmod 600. Never put credentials in Git.
-work_roots = ["~/remote-ws", "~/ws"] # First root is used by the button wizard
+work_roots = ["~/ws", "~/remote-ws"] # First root is used by the button wizard
 data_dir = "~/.local/share/feishu-codex"
 socket_path = "~/.local/share/feishu-codex/control.sock"
 codex_command = ["/home/zhi/.npm-global/bin/codex", "app-server", "--stdio"]

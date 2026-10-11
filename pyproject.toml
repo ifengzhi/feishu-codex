@@ -7,7 +7,7 @@ name = "feishu-codex"
 version = "0.1.0"
 description = "Persistent local Codex task service with Feishu and terminal clients"
 requires-python = ">=3.12"
-dependencies = ["lark-oapi==1.7.3"]
+dependencies = ["lark-oapi==1.7.3", "websockets==15.0.1"]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "jsonschema>=4,<5", "ruff>=0.17,<0.18"]

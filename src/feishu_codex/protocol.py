@@ -24,6 +24,7 @@ class AppServer:
         self.epoch = ""
         self.ready = False
         self.counter = 0
+        self.initialize_result = None
 
     async def start(self):
         self.epoch = uuid.uuid4().hex
@@ -40,6 +41,7 @@ class AppServer:
             "capabilities": {"experimentalApi": True}})
         await self.send({"method": "initialized"})
         self.ready = True
+        self.initialize_result = result
         return result
 
     async def send(self, msg):
