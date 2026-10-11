@@ -25,13 +25,23 @@ def card_for(store, rid):
         if p.get("command"):
             elements += markdown("**实际操作**\n\n" + code(p["command"], "shell"), limit=24000)
         details = {k: v for k, v in p.items() if k not in ("cwd", "reason", "scope", "command")}
+        if question:
+            for q in details.pop("questions", []):
+                lines = [f"问题 {q['id']}：{q['question']}"]
+                for i, option in enumerate(q.get("options") or [], 1):
+                    lines.append(f"{i}. {option['label']}：{option.get('description', '')}")
+                if q.get("isSecret"):
+                    lines.append("敏感问题：请通过 Terminal 回答。")
+                elements.append(plain("\n".join(lines)))
         if details:
             elements += markdown("**问题内容**" if question else "**请求详情**")
             # Literal text guarantees the complete permission payload remains visible.
             elements.append(plain(json.dumps(details, ensure_ascii=False, indent=2)))
     if r["status"] == "pending":
         if question:
-            text = f'请发送：answer {r["task"]} {rid} {{"问题ID":["回答"]}}\n敏感回答请在本机终端输入。'
+            text = (f'先在任务列表选中任务 {r["task"]}，然后直接发送答案；多个问题会先要求选择。'
+                    '\n选项可回复编号（1、2…）、字母（A、B…）或完整选项名称。'
+                    f'\n也可明确发送：answer {r["task"]} {rid} {{"问题ID":["回答"]}}\n敏感回答请在本机终端输入。')
             elements.append({"tag": "div", "text": {"tag": "plain_text", "content": text}})
         else:
             labels = {"accept": "批准本次", "decline": "拒绝", "cancel": "拒绝并中断"}
