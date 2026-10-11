@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from .config import UserError
+from .presentation import card, markdown, metadata
 from .store import encode
 
 MENU_KEYS = {"create_task": "create", "input_command": "command", "list_tasks": "list", "end_task": "end"}
@@ -25,11 +26,6 @@ def button(label, action, **value):
 
 def actions(buttons):
     return [{"tag": "action", "actions": buttons[i:i + 3]} for i in range(0, len(buttons), 3)]
-
-
-def card(title, elements):
-    return {"config": {"wide_screen_mode": True}, "header": {"template": "blue",
-            "title": {"tag": "plain_text", "content": title}}, "elements": elements}
 
 
 class Wizard:
@@ -65,14 +61,19 @@ class Wizard:
             raise UserError("尚未选择当前任务，请先点击“任务列表”选择，或“创建任务”")
         return self.s.check(row["owner"], row["current_task"], mutation)
 
-    def home(self, row, note=""):
+    def home(self, row, note="", result=None):
         context = "尚未选择任务"
         if row["current_task"]:
             t = self.s.db.task(row["current_task"])
             context = f"当前任务：{t['id']} · {t['status']}\n目录：{t['cwd']}\n标签：{t['prompt'][:80]}"
             if t["id"] in self.s.leases:
                 context += "\nTerminal 正在控制，飞书仅可查询。"
-        return card("Codex 任务控制台", [div(note + "\n" + context)] + actions([
+        elements = [div(context)]
+        if note:
+            elements.append(div(note))
+        if result is not None:
+            elements += [{"tag": "hr"}] + markdown(result or "等待进展")
+        return card("Codex 任务控制台", elements + actions([
             button("创建任务", "create"), button("输入命令", "command", task=row["current_task"]),
             button("任务列表", "list"), button("结束任务", "end", task=row["current_task"]),
             button("查询结果", "status", task=row["current_task"])]))
@@ -224,17 +225,17 @@ class Wizard:
                 output = self.home(row, "已请求结束任务，并移入“任务列表 → 已结束任务”；当前上下文已清除。")
             elif action == "history_status":
                 t = self.s.check(actor, value.get("task"))
-                output = card("历史任务结果", [div(f"任务：{t['id']} · {t['status']}\n目录：{t['cwd']}\n{t['summary'][:6000] or '暂无结果'}")]
+                output = card("历史任务结果", [metadata(t), {"tag": "hr"}] + markdown(t['summary'] or '暂无结果')
                               + actions([button("已结束任务", "history"), button("任务列表", "list")]))
             elif action == "status":
                 t = self.context(row)
                 status = self.s.status(t["id"])
                 pending = [r["id"] for r in status["requests"] if r["status"] == "pending"]
                 failed = [n for n in status["notifications"] if n["status"] == "failed"]
-                note = f"结果/当前进展：\n{t['summary'][:6000] or '等待进展'}\n待处理请求：{', '.join(pending) or '无'}"
+                note = f"待处理请求：{', '.join(pending) or '无'}"
                 if failed:
                     note += f"\n通知发送失败 {len(failed)} 条；最近错误：{failed[0]['error']}"
-                output = self.home(row, note)
+                output = self.home(row, note, result=t['summary'])
             else:
                 raise UserError("当前正在等待按钮确认；也可发送“取消向导”重新开始")
             result = {"task": row["current_task"], "stage": row["stage"], "card": output, "destination": row["chat"]}

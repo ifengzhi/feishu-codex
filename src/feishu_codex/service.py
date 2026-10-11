@@ -409,7 +409,7 @@ class Service:
                 self.db.event(tid, method, self.summarize_item(item))
                 if kind == "agentMessage" and item.get("text") and t["status"] != "cancelling":
                     self.db.update(tid, summary=item["text"][-12000:])
-                if time.monotonic() - self.progress_at.get(tid, 0) >= self.cfg.progress_interval:
+                if kind in ("agentMessage", "commandExecution", "fileChange") and time.monotonic() - self.progress_at.get(tid, 0) >= self.cfg.progress_interval:
                     self.progress_at[tid] = time.monotonic()
                     self.notify(tid, "progress", self.summarize_item(item), key=f"{tid}:progress:{int(time.time() // self.cfg.progress_interval)}")
         elif method == "turn/completed":

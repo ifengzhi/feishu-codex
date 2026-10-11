@@ -314,6 +314,16 @@ sudo loginctl enable-linger "$USER"
 | 通知 failed | 查看 `status` 的 numeric API code、飞书权限和可用范围；不影响任务本身 |
 | 终端连接失败 | 服务是否运行、两端是否使用同一个 `--config` 和 socket、是否为同一 Linux UID |
 
+### 飞书结果卡片的显示
+
+任务完成、进度、异常、Terminal 释放控制权的通知，以及“查询结果”和历史结果，使用 Card JSON 2.0 富文本卡片。任务编号和目录与结果正文分开；正文保留 Markdown 的标题、粗体、列表、行内代码、代码块和表格。表格使用独立 Markdown 组件，较长表格由飞书客户端分页展示。按钮仍使用已配置的 `card.action.trigger` 长连接回调，无需增加权限或重新发布应用。
+
+卡片正文有发送容量限制，超长内容明确标记为前段预览；本机 `feishu-codex status <任务编号>` 查看后台保存的结果。审批的目录、原因、范围和实际命令分开展示；审批详情超过容量时不提供批准按钮，需到终端查看后处理。模型生成的 HTML 标签不会触发 @ 人通知。只包含内部用户消息 ID 的事件不再作为进度主动发送。
+
+升级后旧消息不会自动重发或转换；点击“任务列表”选择任务，再点“查询结果”，即可取得新格式。手机端表格、代码块和按钮的实际显示需使用支持 Card JSON 2.0 的飞书客户端验收。
+
+格式依据官方文档：[富文本组件](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-components/content-components/rich-text)、[按钮与回调](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button)、[Card JSON 2.0](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-structure)。
+
 ## 8. 测试与验收
 
 ```bash
@@ -323,7 +333,7 @@ bash scripts/check-protocol.sh
 .venv/bin/ruff check src tests scripts
 ```
 
-本机模拟与协议回归结果：**66 passed**，静态检查通过。模拟测试不读取真实飞书配置、不发真实消息、不调用模型。覆盖新目录与符号链接边界、串行执行、继续/steer/取消、批准/拒绝/重复/过期/错误归属、普通用户输入、幂等和去重、SQLite 恢复、真实 Unix socket 断开、后台进程被杀后恢复、终端接管与通知暂停恢复、通知失败与积压隔离、凭据脱敏、真实 SDK 消息/卡片/菜单帧和请求构造、按钮向导/上下文/旧卡片失效。还覆盖结束任务归档、连续点击和慢回调、原生终端的 Unix WebSocket 握手与事件、仅绑定任务访问、沙箱/配置写入约束、共享审批及权限子集、重复请求不重放、串行执行、租约释放、启动失败、恢复期间事件缓冲、真实后台被杀后旧终端及审批失效、遗留 socket 清理和默认 `~/ws`。SDK 内置 protobuf 有两条 Python 弃用警告，不影响通过。
+本机模拟与协议回归结果：**76 passed**，静态检查通过。模拟测试不读取真实飞书配置、不发真实消息、不调用模型。覆盖新目录与符号链接边界、串行执行、继续/steer/取消、批准/拒绝/重复/过期/错误归属、普通用户输入、幂等和去重、SQLite 恢复、真实 Unix socket 断开、后台进程被杀后恢复、终端接管与通知暂停恢复、通知失败与积压隔离、凭据脱敏、真实 SDK 消息/卡片/菜单帧和请求构造、按钮向导/上下文/旧卡片失效。还覆盖结束任务归档、连续点击和慢回调、原生终端的 Unix WebSocket 握手与事件、仅绑定任务访问、沙箱/配置写入约束、共享审批及权限子集、重复请求不重放、串行执行、租约释放、启动失败、恢复期间事件缓冲、真实后台被杀后旧终端及审批失效、遗留 socket 清理和默认 `~/ws`。SDK 内置 protobuf 有两条 Python 弃用警告，不影响通过。 富文本回归覆盖最近提交记录表格、代码块、长中文内容、Card 2.0 按钮回调、审批容量保护及无效进度过滤。
 
 `scripts/audit-secrets.py` 会以不输出凭据值的方式检查 Git 跟踪文件及本应用日志/数据库中是否存在本机已知凭据。本机检查未发现已知凭据进入上述内容；私有配置与运行数据均不在 Git 中。
 

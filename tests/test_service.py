@@ -91,7 +91,7 @@ async def test_approval_once(service, decision):
     results = await asyncio.gather(s.execute(req, "ou_test"), s.execute(req, "ou_test"), return_exceptions=True)
     assert sum(isinstance(x, UserError) for x in results) == 1
     assert len(s.rpc.replies) == 1 and s.rpc.replies[0][1] == {"decision": decision}
-    assert all(e["tag"] != "action" for e in card_for(s.db, rid)["elements"])
+    assert '"tag": "button"' not in json.dumps(card_for(s.db, rid))
 
 
 async def test_approval_scope_and_expiry(service):

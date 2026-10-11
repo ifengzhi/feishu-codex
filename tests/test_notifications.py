@@ -19,6 +19,9 @@ def test_sdk_send_and_patch_builders():
     assert calls[-1].receive_id_type == "open_id"
     assert calls[-1].request_body.receive_id == "ou_test"
     assert calls[-1].request_body.msg_type == "interactive"
+    row.update(kind="completed")
+    sender.send(row, {"schema": "2.0", "body": {"elements": []}})
+    assert calls[-1].request_body.msg_type == "interactive"
     row.update(kind="request", message_id="om_result")
     sender.send(row, {"elements": []})
     assert calls[-1].message_id == "om_result"

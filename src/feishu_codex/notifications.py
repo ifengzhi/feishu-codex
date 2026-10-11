@@ -3,6 +3,8 @@ import json
 import time
 import uuid
 
+from .presentation import card, code, markdown, notification_card, plain
+
 
 def card_for(store, rid):
     r = store.one("SELECT * FROM requests WHERE id=?", (rid,))
@@ -11,10 +13,22 @@ def card_for(store, rid):
     title = "回答问题（非操作授权）" if question else "Codex 操作授权"
     text = f"任务：{r['task']}\n请求：{r['id']}\n状态：{r['status']}\n"
     text += json.dumps(p, ensure_ascii=False, indent=2)
-    too_large = len(text.encode()) > 18000
+    too_large = len(text.encode()) > 18000 or len(json.dumps(p, ensure_ascii=False).encode()) > 22000
     if too_large:
         text = f"任务：{r['task']}\n请求：{rid}\n操作内容超过飞书卡片容量，请 feishu-codex attach {r['task']} 查看完整详情并处理。此卡片不提供批准。\n状态：{r['status']}"
-    elements = [{"tag": "div", "text": {"tag": "plain_text", "content": text}}]
+    elements = [plain(text)]
+    if not too_large:
+        elements = [plain(f"任务：{r['task']}\n请求：{rid} · {r['status']}"), {"tag": "hr"}]
+        for key, label in (("cwd", "工作目录"), ("reason", "请求原因"), ("scope", "权限范围")):
+            if p.get(key):
+                elements.append(plain(f"{label}：{p[key]}"))
+        if p.get("command"):
+            elements += markdown("**实际操作**\n\n" + code(p["command"], "shell"), limit=24000)
+        details = {k: v for k, v in p.items() if k not in ("cwd", "reason", "scope", "command")}
+        if details:
+            elements += markdown("**问题内容**" if question else "**请求详情**")
+            # Literal text guarantees the complete permission payload remains visible.
+            elements.append(plain(json.dumps(details, ensure_ascii=False, indent=2)))
     if r["status"] == "pending":
         if question:
             text = f'请发送：answer {r["task"]} {rid} {{"问题ID":["回答"]}}\n敏感回答请在本机终端输入。'
@@ -30,9 +44,7 @@ def card_for(store, rid):
                                 "type": "default", "value": {"task": r["task"], "request": rid, "decision": d}})
             if actions:
                 elements.append({"tag": "action", "actions": actions})
-    return {"config": {"wide_screen_mode": True, "update_multi": True},
-            "header": {"title": {"tag": "plain_text", "content": title},
-                       "template": "orange" if r["status"] == "pending" else "grey"}, "elements": elements}
+    return card(title, elements, "orange" if r["status"] == "pending" else "grey")
 
 
 class FeishuSender:
@@ -60,7 +72,7 @@ class FeishuSender:
                 receive_type, destination = "open_id", destination.removeprefix("open_id:")
             req = CreateMessageRequest.builder().receive_id_type(receive_type).request_body(
                 CreateMessageRequestBody.builder().receive_id(destination).msg_type(
-                    "interactive" if row["kind"] in ("request", "ui") else "text").content(content).uuid(
+                    "interactive").content(content).uuid(
                     str(uuid.uuid5(uuid.NAMESPACE_URL, row["id"]))).build()).build()
             result = self.client.im.v1.message.create(req)
         if not result.success():
@@ -100,8 +112,7 @@ class Outbox:
             if row["kind"] == "request":
                 body = card_for(s.db, body["request"])
             elif row["kind"] != "ui":
-                message = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
-                body = {"text": f"任务 {row['task'] or '-'} · {row['kind']}\n" + message[:7000]}
+                body = notification_card(row, body, s.db.task(row["task"]) if row["task"] else None)
             try:
                 message_id = await asyncio.to_thread(self.sender.send, row, body)
                 # Preserve a concurrent request resolution/newer card update.
